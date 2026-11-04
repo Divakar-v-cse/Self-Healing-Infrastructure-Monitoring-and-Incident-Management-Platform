@@ -1,0 +1,69 @@
+---
+# Automated recovery: network anomaly.
+# Strategy: inspect interfaces -> clear DNS cache -> verify gateway reachability
+# -> optionally bounce the interface (opt-in, disruptive).
+- name: Recover network anomaly
+  hosts: all
+  gather_facts: true
+  become: true
+  vars:
+    playbook_kind: network
+    connectivity_probe: 1.1.1.1
+  tasks:
+    - name: Run shared recovery pre-flight
+      ansible.builtin.include_role:
+        name: recovery_common
+
+    - name: Inspect interface statistics
+      ansible.builtin.command: ip -s link
+      register: link_stats
+      changed_when: false
+      failed_when: false
+
+    - name: Report interface statistics
+      ansible.builtin.debug:
+        msg: "{{ link_stats.stdout_lines | default([]) }}"
+
+    - name: Inspect error counters
+      ansible.builtin.shell: |
+        set -o pipefail
+        ip -s link | awk '/^[0-9]+:/ {iface=$2} /errors/ {print iface, $0}'
+      args:
+        executable: /bin/bash
+      register: link_errors
+      changed_when: false
+      failed_when: false
+
+    - name: Report interface error counters
+      ansible.builtin.debug:
+        msg: "{{ link_errors.stdout_lines | default([]) }}"
+
+    - name: Flush the DNS resolver cache
+      ansible.builtin.command: resolvectl flush-caches
+      changed_when: true
+      failed_when: false
+
+    - name: Probe gateway connectivity
+      ansible.builtin.command: "ping -c 3 -W 2 {{ connectivity_probe }}"
+      register: probe
+      changed_when: false
+      failed_when: false
+
+    - name: Bounce the primary interface when enabled
+      ansible.builtin.shell: |
+        set -o pipefail
+        iface=$(ip route get 1.1.1.1 | awk '{print $5; exit}')
+        ip link set "$iface" down && sleep 3 && ip link set "$iface" up
+        echo "bounced $iface"
+      args:
+        executable: /bin/bash
+      when: network_restart_enabled | bool
+      changed_when: true
+      failed_when: false
+
+    - name: Report network recovery outcome
+      ansible.builtin.debug:
+        msg:
+          - "gateway probe rc: {{ probe.rc | default('n/a') }}"
+          - "{{ (probe.stdout_lines | default([]))[:5] }}"
+          - "RECOVERY_RESULT=success action=network_recovery host={{ inventory_hostname }}"

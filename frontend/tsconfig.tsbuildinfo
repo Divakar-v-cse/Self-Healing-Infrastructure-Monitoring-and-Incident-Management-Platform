@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/components/drawers.tsx","./src/components/ui.tsx","./src/lib/api.ts","./src/lib/format.ts","./src/lib/usepolling.ts","./src/pages/hosts.tsx","./src/pages/incidents.tsx","./src/pages/overview.tsx","./src/pages/recoveries.tsx","./src/pages/reports.tsx","./src/pages/settings.tsx","./src/pages/simulation.tsx"],"version":"5.6.3"}

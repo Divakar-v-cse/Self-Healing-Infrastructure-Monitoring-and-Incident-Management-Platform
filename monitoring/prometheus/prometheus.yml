@@ -1,0 +1,86 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+  external_labels:
+    monitor: self-healing-platform
+    environment: lab
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - timeout: 10s
+      api_version: v2
+      static_configs:
+        - targets:
+            - alertmanager:9093
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # ---------------------------------------------------------------------
+  # Node metrics.
+  #
+  # The simulator serves one path per virtual host and one scrape target
+  # advertises each host's address through the `instance` label, so a "down"
+  # host produces a failed scrape (up == 0) exactly like a real node_exporter.
+  #
+  # For real machines, add one static_configs entry per host:
+  #
+  #     - targets: ["10.0.0.21:9100"]
+  #       labels:
+  #         node: "prod-web-01"
+  #         env: "production"
+  # ---------------------------------------------------------------------
+  - job_name: node
+    scrape_interval: 10s
+    static_configs:
+      - targets: ["simulator:9101"]
+        labels:
+          instance: "10.10.0.11:9100"
+          node: web-01
+          env: simulated
+          __metrics_path__: /metrics/web-01
+      - targets: ["simulator:9101"]
+        labels:
+          instance: "10.10.0.12:9100"
+          node: api-01
+          env: simulated
+          __metrics_path__: /metrics/api-01
+      - targets: ["simulator:9101"]
+        labels:
+          instance: "10.10.0.13:9100"
+          node: db-01
+          env: simulated
+          __metrics_path__: /metrics/db-01
+
+  # Synthetic availability probing for endpoints that have no exporter.
+  - job_name: blackbox
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - http://ship-backend:8000/api/v1/health
+        labels:
+          service: ship-backend
+          env: simulated
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # The platform's own KPIs (incidents, recoveries, safeguard blocks).
+  - job_name: ship-backend
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["ship-backend:8000"]
+        labels:
+          service: self-healing-platform

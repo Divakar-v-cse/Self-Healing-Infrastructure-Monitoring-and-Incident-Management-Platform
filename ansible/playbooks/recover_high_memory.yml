@@ -1,0 +1,84 @@
+---
+# Automated recovery: memory pressure.
+# Strategy: reclaim page cache (safe), drop clean caches only, restart the
+# affected service when the pressure persists, then verify available memory.
+- name: Recover memory pressure
+  hosts: all
+  gather_facts: true
+  become: true
+  vars:
+    playbook_kind: memory
+    memory_restart_threshold_percent: 92
+  tasks:
+    - name: Run shared recovery pre-flight
+      ansible.builtin.include_role:
+        name: recovery_common
+
+    - name: Read memory before recovery
+      ansible.builtin.command: free -m
+      register: memory_before
+      changed_when: false
+      failed_when: false
+
+    - name: Report memory usage before recovery
+      ansible.builtin.debug:
+        msg: "{{ memory_before.stdout_lines | default([]) }}"
+
+    - name: Identify top memory consumers
+      ansible.builtin.shell: |
+        set -o pipefail
+        ps -eo pid,comm,%mem,rss --sort=-%mem | head -n 8
+      args:
+        executable: /bin/bash
+      register: top_memory
+      changed_when: false
+      failed_when: false
+
+    - name: Report top memory consumers
+      ansible.builtin.debug:
+        msg: "{{ top_memory.stdout_lines | default([]) }}"
+
+    - name: Calculate current memory utilisation
+      ansible.builtin.shell: |
+        set -o pipefail
+        awk '/MemTotal/ {t=$2} /MemAvailable/ {a=$2} END {printf "%d", (1 - a/t) * 100}' /proc/meminfo
+      args:
+        executable: /bin/bash
+      register: memory_percent
+      changed_when: false
+      failed_when: false
+
+    - name: Sync filesystems before reclaiming cache
+      ansible.builtin.command: sync
+      changed_when: false
+      failed_when: false
+
+    - name: Drop clean page cache and reclaimable slabs
+      ansible.builtin.command: sysctl -w vm.drop_caches=1
+      changed_when: true
+      failed_when: false
+
+    - name: Restart the service when pressure is critical
+      ansible.builtin.systemd:
+        name: "{{ service_name }}"
+        state: restarted
+      when:
+        - service_name | length > 0
+        - (memory_percent.stdout | default('0') | int) >= memory_restart_threshold_percent
+
+    - name: Allow the host to settle
+      ansible.builtin.pause:
+        seconds: 10
+
+    - name: Read memory after recovery
+      ansible.builtin.command: free -m
+      register: memory_after
+      changed_when: false
+      failed_when: false
+
+    - name: Report memory recovery outcome
+      ansible.builtin.debug:
+        msg:
+          - "utilisation before: {{ memory_percent.stdout | default('n/a') }}%"
+          - "{{ memory_after.stdout_lines | default([]) }}"
+          - "RECOVERY_RESULT=success action=memory_recovery host={{ inventory_hostname }}"

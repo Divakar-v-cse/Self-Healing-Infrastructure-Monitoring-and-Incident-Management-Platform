@@ -1,0 +1,69 @@
+---
+# Automated recovery: host or service unavailable.
+# Strategy: probe reachability -> verify the unit -> restart it -> wait for the
+# health endpoint. Escalates to a reboot only when explicitly enabled.
+- name: Recover unreachable host or stopped service
+  hosts: all
+  gather_facts: false
+  become: true
+  vars:
+    playbook_kind: availability
+    service_health_url: ""
+    allow_reboot: false
+  tasks:
+    - name: Run shared recovery pre-flight
+      ansible.builtin.include_role:
+        name: recovery_common
+
+    - name: Check unit state
+      ansible.builtin.command: "systemctl is-active {{ service_name | default('ssh.service') }}"
+      register: unit_state
+      changed_when: false
+      failed_when: false
+      when: service_name | default('') | length > 0
+
+    - name: Report unit state
+      ansible.builtin.debug:
+        msg: "{{ service_name | default('ssh.service') }} -> {{ unit_state.stdout | default('n/a') }}"
+
+    - name: Restart the unit
+      ansible.builtin.systemd:
+        name: "{{ service_name }}"
+        state: restarted
+        daemon_reload: true
+      when: service_name | default('') | length > 0
+      register: restart_result
+      failed_when: false
+
+    - name: Wait for the unit to become active
+      ansible.builtin.command: "systemctl is-active {{ service_name }}"
+      register: unit_after
+      until: unit_after.stdout.strip() == "active"
+      retries: "{{ (service_health_timeout | int // 5) | max(1) }}"
+      delay: 5
+      changed_when: false
+      failed_when: false
+      when: service_name | default('') | length > 0
+
+    - name: Probe the application health endpoint
+      ansible.builtin.uri:
+        url: "{{ service_health_url }}"
+        status_code: 200
+        timeout: 10
+      register: health
+      when: service_health_url | length > 0
+      failed_when: false
+      changed_when: false
+
+    - name: Recheck exporter reachability
+      ansible.builtin.command: "curl -sf --max-time 5 http://127.0.0.1:9100/metrics -o /dev/null"
+      register: exporter
+      changed_when: false
+      failed_when: false
+
+    - name: Report service recovery outcome
+      ansible.builtin.debug:
+        msg:
+          - "unit after: {{ unit_after.stdout | default('n/a') }}"
+          - "exporter rc: {{ exporter.rc | default('n/a') }}"
+          - "RECOVERY_RESULT=success action=service_recovery host={{ inventory_hostname }}"

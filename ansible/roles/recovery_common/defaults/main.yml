@@ -1,0 +1,20 @@
+---
+# Defaults for the shared recovery role. Every playbook can override these.
+recovery_mode: automated
+recovery_log_dir: /var/log/self-healing
+log_retention_days: 14
+service_health_timeout: 30
+service_name: ""
+docker_prune_enabled: false
+network_restart_enabled: false
+cpu_kill_allowlist:
+  - dd
+  - stress
+  - stress-ng
+  - yes
+cpu_kill_percent: 90
+disk_cleanup_paths:
+  - /var/log
+  - /tmp
+  - /var/cache/apt/archives
+disk_target_free_percent: 20

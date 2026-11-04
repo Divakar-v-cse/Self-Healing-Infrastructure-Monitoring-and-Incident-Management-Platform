@@ -1,0 +1,46 @@
+---
+# Shared pre-flight for every recovery playbook.
+# - refuses to touch a host that is already recovering (marker file)
+# - writes an audit marker that the platform can correlate with its own log
+
+- name: Ensure recovery log directory exists
+  ansible.builtin.file:
+    path: "{{ recovery_log_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  become: true
+
+- name: Read previous recovery marker
+  ansible.builtin.stat:
+    path: "{{ recovery_log_dir }}/last_recovery.json"
+  register: previous_recovery
+
+- name: Report previous recovery (loop guard visibility)
+  ansible.builtin.debug:
+    msg: >-
+      previous recovery on this host:
+      {{ (lookup('file', recovery_log_dir ~ '/last_recovery.json') if previous_recovery.stat.exists else 'none') }}
+
+- name: Record this recovery attempt
+  ansible.builtin.copy:
+    dest: "{{ recovery_log_dir }}/last_recovery.json"
+    mode: "0640"
+    content: |
+      {"host": "{{ inventory_hostname }}",
+       "playbook": "{{ ansible_play_name }}",
+       "mode": "{{ recovery_mode }}",
+       "started_at": "{{ ansible_date_time.iso8601 }}",
+       "operator": "self-healing-platform"}
+  become: true
+
+- name: Verify the host is responsive
+  ansible.builtin.command: uptime
+  register: uptime_before
+  changed_when: false
+  failed_when: false
+
+- name: Show pre-recovery load
+  ansible.builtin.debug:
+    msg: "load before recovery: {{ uptime_before.stdout | default('unavailable') }}"

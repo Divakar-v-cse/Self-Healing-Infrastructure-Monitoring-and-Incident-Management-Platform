@@ -1,0 +1,86 @@
+---
+# Automated recovery: filesystem capacity.
+# Strategy: rotate logs -> vacuum the journal -> prune package caches -> verify
+# free space. Docker pruning is opt-in because it deletes images.
+- name: Recover disk pressure
+  hosts: all
+  gather_facts: true
+  become: true
+  vars:
+    playbook_kind: disk
+    journal_vacuum_size: 200M
+    log_age_days: 7
+  tasks:
+    - name: Run shared recovery pre-flight
+      ansible.builtin.include_role:
+        name: recovery_common
+
+    - name: Read filesystem usage before recovery
+      ansible.builtin.command: df -h --output=source,size,used,avail,pcent,target
+      register: disk_before
+      changed_when: false
+      failed_when: false
+
+    - name: Report filesystem usage
+      ansible.builtin.debug:
+        msg: "{{ disk_before.stdout_lines | default([]) }}"
+
+    - name: Rotate system logs
+      ansible.builtin.command: logrotate -f /etc/logrotate.conf
+      changed_when: true
+      failed_when: false
+
+    - name: Vacuum the systemd journal
+      ansible.builtin.command: "journalctl --vacuum-size={{ journal_vacuum_size }}"
+      changed_when: true
+      failed_when: false
+
+    - name: Remove logs older than the retention window
+      ansible.builtin.shell: |
+        set -o pipefail
+        find /var/log -type f -name "*.gz" -mtime +{{ log_age_days }} -delete
+        find /var/log -type f -name "*.1" -mtime +{{ log_age_days }} -delete
+        echo cleaned
+      args:
+        executable: /bin/bash
+      changed_when: true
+      failed_when: false
+
+    - name: Remove stale temporary files
+      ansible.builtin.shell: |
+        set -o pipefail
+        find /tmp -type f -atime +2 -delete 2>/dev/null || true
+        echo cleaned
+      args:
+        executable: /bin/bash
+      changed_when: true
+      failed_when: false
+
+    - name: Report the largest directories
+      ansible.builtin.shell: |
+        set -o pipefail
+        du -xh --max-depth=2 / 2>/dev/null | sort -h | tail -n 10
+      args:
+        executable: /bin/bash
+      register: biggest_dirs
+      changed_when: false
+      failed_when: false
+
+    - name: Prune unused docker data when explicitly enabled
+      ansible.builtin.command: docker system prune -af --volumes
+      when: docker_prune_enabled | bool
+      changed_when: true
+      failed_when: false
+
+    - name: Re-read filesystem usage
+      ansible.builtin.command: df -h --output=pcent,target /
+      register: disk_after
+      changed_when: false
+      failed_when: false
+
+    - name: Report disk recovery outcome
+      ansible.builtin.debug:
+        msg:
+          - "largest directories: {{ biggest_dirs.stdout_lines | default([]) }}"
+          - "root usage after: {{ disk_after.stdout_lines | default([]) }}"
+          - "RECOVERY_RESULT=success action=disk_recovery host={{ inventory_hostname }}"

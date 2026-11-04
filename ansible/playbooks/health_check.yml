@@ -1,0 +1,41 @@
+---
+# Read-only diagnostic playbook. Used as the safe default when an incident has
+# no matching recovery strategy, and for on-demand fleet health snapshots.
+- name: Collect host health snapshot
+  hosts: all
+  gather_facts: true
+  become: false
+  tasks:
+    - name: Read load average
+      ansible.builtin.command: cat /proc/loadavg
+      register: loadavg
+      changed_when: false
+      failed_when: false
+
+    - name: Read memory summary
+      ansible.builtin.command: free -m
+      register: meminfo
+      changed_when: false
+      failed_when: false
+
+    - name: Read filesystem usage
+      ansible.builtin.command: df -h --output=source,pcent,target
+      register: filesystems
+      changed_when: false
+      failed_when: false
+
+    - name: Read uptime
+      ansible.builtin.command: uptime -p
+      register: uptime
+      changed_when: false
+      failed_when: false
+
+    - name: Report health snapshot
+      ansible.builtin.debug:
+        msg:
+          - "host: {{ inventory_hostname }}"
+          - "uptime: {{ uptime.stdout | default('n/a') }}"
+          - "load: {{ loadavg.stdout | default('n/a') }}"
+          - "{{ meminfo.stdout_lines | default([]) }}"
+          - "{{ filesystems.stdout_lines | default([]) }}"
+          - "RECOVERY_RESULT=success action=health_check host={{ inventory_hostname }}"

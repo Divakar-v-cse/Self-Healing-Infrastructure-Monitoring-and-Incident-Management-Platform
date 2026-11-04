@@ -1,0 +1,55 @@
+# ---- secrets -------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+vault/
+
+# ---- python --------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# ---- databases & runtime data -------------------------------------------
+*.db
+*.db-wal
+*.db-shm
+*.sqlite3
+backend/data/
+data/
+logs/
+*.log
+
+# ---- node / frontend -----------------------------------------------------
+node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+yarn-error.log*
+
+# ---- ansible -------------------------------------------------------------
+*.retry
+ansible/.vault_pass
+ansible/vault_pass.txt
+
+# ---- editors / os --------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# ---- verification scratch ------------------------------------------------
+.tmp/
+prometheus-data/
+tmp/

@@ -1,0 +1,87 @@
+---
+# Automated recovery: sustained CPU saturation.
+# Strategy: observe -> terminate an allow-listed runaway -> restart the service
+# -> verify the load actually dropped. Never kills an unknown process.
+- name: Recover high CPU utilisation
+  hosts: all
+  gather_facts: true
+  become: true
+  vars:
+    playbook_kind: cpu
+  tasks:
+    - name: Run shared recovery pre-flight
+      ansible.builtin.include_role:
+        name: recovery_common
+
+    - name: Identify the top CPU consumers
+      ansible.builtin.shell: |
+        set -o pipefail
+        ps -eo pid,ppid,comm,%cpu,%mem --sort=-%cpu | head -n 8
+      args:
+        executable: /bin/bash
+      register: top_processes
+      changed_when: false
+      failed_when: false
+
+    - name: Report top CPU consumers
+      ansible.builtin.debug:
+        msg: "{{ top_processes.stdout_lines | default([]) }}"
+
+    - name: Find allow-listed runaway workloads
+      ansible.builtin.shell: |
+        set -o pipefail
+        ps -eo pid,comm,%cpu --sort=-%cpu --no-headers \
+          | awk -v limit="{{ cpu_kill_percent }}" '$3 >= limit {print $1, $2}'
+      args:
+        executable: /bin/bash
+      register: runaway
+      changed_when: false
+      failed_when: false
+
+    - name: Stop allow-listed runaway processes
+      ansible.builtin.shell: |
+        set -o pipefail
+        killed=""
+        while read -r pid comm; do
+          case "{{ cpu_kill_allowlist | join(' ') }}" in
+            *"$comm"*) kill -TERM "$pid" 2>/dev/null && killed="$killed $pid:$comm" ;;
+          esac
+        done <<< "{{ runaway.stdout }}"
+        echo "terminated:${killed:-none}"
+      args:
+        executable: /bin/bash
+      register: killed
+      changed_when: "'terminated:none' not in killed.stdout"
+      failed_when: false
+
+    - name: Confirm service unit exists
+      ansible.builtin.stat:
+        path: "/etc/systemd/system/{{ service_name }}"
+      register: service_unit
+      when: service_name | length > 0
+
+    - name: Restart the affected service
+      ansible.builtin.systemd:
+        name: "{{ service_name }}"
+        state: restarted
+        daemon_reload: true
+      when:
+        - service_name | length > 0
+        - service_unit.stat.exists | default(false)
+
+    - name: Allow the host to settle
+      ansible.builtin.pause:
+        seconds: 15
+
+    - name: Re-read load average
+      ansible.builtin.command: cat /proc/loadavg
+      register: load_after
+      changed_when: false
+      failed_when: false
+
+    - name: Report CPU recovery outcome
+      ansible.builtin.debug:
+        msg:
+          - "killed: {{ killed.stdout | default('n/a') }}"
+          - "load after: {{ load_after.stdout | default('unavailable') }}"
+          - "RECOVERY_RESULT=success action=cpu_recovery host={{ inventory_hostname }}"

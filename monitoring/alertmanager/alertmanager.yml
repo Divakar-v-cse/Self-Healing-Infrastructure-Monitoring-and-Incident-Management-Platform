@@ -1,0 +1,53 @@
+global:
+  resolve_timeout: 5m
+  http_config:
+    follow_redirects: true
+
+route:
+  receiver: platform-webhook
+  group_by: [alertname, node, category]
+  group_wait: 10s
+  group_interval: 2m
+  repeat_interval: 4h
+  routes:
+    - matchers: ['severity="critical"']
+      receiver: platform-webhook
+      group_wait: 5s
+      group_interval: 1m
+      repeat_interval: 1h
+      continue: false
+    - matchers: ['severity="warning"']
+      receiver: platform-webhook
+      repeat_interval: 6h
+    - matchers: ['category="service"']
+      receiver: platform-webhook
+      repeat_interval: 2h
+
+receivers:
+  - name: platform-webhook
+    webhook_configs:
+      - url: http://ship-backend:8000/api/v1/webhooks/alertmanager
+        send_resolved: true
+        max_alerts: 0
+
+  - name: blackhole
+    webhook_configs:
+      - url: http://ship-backend:8000/api/v1/webhooks/alertmanager
+        send_resolved: false
+
+inhibit_rules:
+  # A dead host cannot also be "disk full" - suppress the derived noise.
+  - source_matchers: ['alertname="HostDown"']
+    target_matchers: ['severity=~"warning|critical"']
+    equal: [node]
+  # Critical CPU saturation makes the warning-level alert redundant.
+  - source_matchers: ['alertname="CpuSaturation"']
+    target_matchers: ['alertname="HighCpuUsage"']
+    equal: [node]
+  - source_matchers: ['alertname="MemoryPressure"']
+    target_matchers: ['alertname="HighMemoryUsage"']
+    equal: [node]
+  - source_matchers: ['alertname="HostDiskFull"']
+    target_matchers: ['alertname="DiskSpaceLow"']
+    equal: [node]
+

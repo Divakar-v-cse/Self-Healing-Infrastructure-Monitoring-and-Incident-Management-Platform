@@ -1,0 +1,197 @@
+groups:
+  - name: host-availability
+    interval: 15s
+    rules:
+      - alert: HostDown
+        expr: up{job="node"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          metric: availability
+          category: availability
+          team: sre
+        annotations:
+          value: '{{ $value }}'
+          summary: "Host {{ $labels.node }} is unreachable"
+          description: >-
+            Prometheus has failed to scrape {{ $labels.instance }}
+            ({{ $labels.node }}) for more than one minute.
+          runbook_url: "docs/runbooks.md#host-unreachable"
+
+      - alert: HostFlapping
+        expr: changes(up{job="node"}[15m]) > 3
+        for: 5m
+        labels:
+          severity: warning
+          metric: availability
+          category: availability
+          team: sre
+        annotations:
+          value: '{{ $value }}'
+          summary: "Host {{ $labels.node }} is flapping"
+          description: "{{ $labels.node }} changed reachability state more than 3 times in 15 minutes."
+
+  - name: host-resources
+    interval: 15s
+    rules:
+      - alert: HighCpuUsage
+        expr: 100 - (avg without (cpu) (rate(node_cpu_seconds_total{mode="idle",job="node"}[5m])) * 100) > 75
+        for: 5m
+        labels:
+          severity: warning
+          metric: cpu
+          category: cpu
+          team: sre
+        annotations:
+          value: '{{ $value }}'
+          summary: "High CPU utilisation on {{ $labels.node }}"
+          description: "CPU utilisation is {{ printf \"%.1f\" $value }}% on {{ $labels.node }} (threshold 75%)."
+          runbook_url: "docs/runbooks.md#cpu-saturation"
+
+      - alert: CpuSaturation
+        expr: 100 - (avg without (cpu) (rate(node_cpu_seconds_total{mode="idle",job="node"}[5m])) * 100) > 90
+        for: 2m
+        labels:
+          severity: critical
+          metric: cpu
+          category: cpu
+          team: sre
+        annotations:
+          value: '{{ $value }}'
+          summary: "CPU saturation on {{ $labels.node }}"
+          description: "CPU utilisation is {{ printf \"%.1f\" $value }}% on {{ $labels.node }} (threshold 90%)."
+          runbook_url: "docs/runbooks.md#cpu-saturation"
+
+      - alert: HighMemoryUsage
+        expr: 100 * (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 80
+        for: 5m
+        labels:
+          severity: warning
+          metric: memory
+          category: memory
+          team: sre
+        annotations:
+          value: '{{ $value }}'
+          summary: "High memory utilisation on {{ $labels.node }}"
+          description: "Memory utilisation is {{ printf \"%.1f\" $value }}% on {{ $labels.node }} (threshold 80%)."
+          runbook_url: "docs/runbooks.md#memory-pressure"
+
+      - alert: MemoryPressure
+        expr: 100 * (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 92
+        for: 2m
+        labels:
+          severity: critical
+          metric: memory
+          category: memory
+          team: sre
+        annotations:
+          value: '{{ $value }}'
+          summary: "Memory pressure on {{ $labels.node }}"
+          description: "Memory utilisation is {{ printf \"%.1f\" $value }}% on {{ $labels.node }} (threshold 92%)."
+          runbook_url: "docs/runbooks.md#memory-pressure"
+
+      - alert: DiskSpaceLow
+        expr: |
+          100 * (1 - (min without (device, fstype) (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs",mountpoint="/"})
+                     / min without (device, fstype) (node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs",mountpoint="/"}))) > 80
+        for: 5m
+        labels:
+          severity: warning
+          metric: disk
+          category: disk
+          team: sre
+        annotations:
+          value: '{{ $value }}'
+          summary: "Disk space low on {{ $labels.node }}"
+          description: "Root filesystem is {{ printf \"%.1f\" $value }}% full on {{ $labels.node }} (threshold 80%)."
+          runbook_url: "docs/runbooks.md#disk-pressure"
+
+      - alert: HostDiskFull
+        expr: |
+          100 * (1 - (min without (device, fstype) (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs",mountpoint="/"})
+                     / min without (device, fstype) (node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs",mountpoint="/"}))) > 90
+        for: 2m
+        labels:
+          severity: critical
+          metric: disk
+          category: disk
+          team: sre
+        annotations:
+          value: '{{ $value }}'
+          summary: "Disk almost full on {{ $labels.node }}"
+          description: "Root filesystem is {{ printf \"%.1f\" $value }}% full on {{ $labels.node }} (threshold 90%)."
+          runbook_url: "docs/runbooks.md#disk-pressure"
+
+      - alert: NetworkTrafficSpike
+        expr: sum by (instance, node) (rate(node_network_receive_bytes_total{device!~"lo|veth.*|docker.*"}[5m])) * 8 > 1e8
+        for: 5m
+        labels:
+          severity: warning
+          metric: network
+          category: network
+          team: sre
+        annotations:
+          value: '{{ $value }}'
+          summary: "Network traffic spike on {{ $labels.node }}"
+          description: "Ingress is {{ printf \"%.0f\" $value }} bit/s on {{ $labels.node }} (threshold 100 Mbit/s)."
+          runbook_url: "docs/runbooks.md#network-anomaly"
+
+      - alert: HighLoadAverage
+        expr: node_load1 > (count by (instance) (node_cpu_seconds_total{mode="idle"}) * 2)
+        for: 10m
+        labels:
+          severity: warning
+          metric: cpu
+          category: cpu
+          team: sre
+        annotations:
+          value: '{{ $value }}'
+          summary: "High load average on {{ $labels.node }}"
+          description: "1m load average {{ printf \"%.2f\" $value }} exceeds 2x the CPU core count."
+
+  - name: platform-health
+    interval: 30s
+    rules:
+      - alert: SelfHealingBackendDown
+        expr: up{job="ship-backend"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          metric: service
+          category: service
+          team: platform
+        annotations:
+          value: '{{ $value }}'
+          summary: "Self-healing backend is unreachable"
+          description: "Prometheus cannot scrape the platform API; automated recovery is unavailable."
+
+      - alert: RecoveryBlockedBySafeguard
+        expr: increase(ship_recovery_actions_total{status="blocked"}[15m]) > 2
+        for: 1m
+        labels:
+          severity: warning
+          metric: service
+          category: service
+          team: platform
+        annotations:
+          value: '{{ $value }}'
+          summary: "Recovery attempts are being blocked by safeguards"
+          description: >-
+            More than two recovery attempts were blocked in 15 minutes. This is the
+            loop-protection guard working; investigate why recovery keeps failing
+            instead of raising the limits.
+
+      - alert: IncidentBacklog
+        expr: sum(ship_incidents_total{status=~"open|acknowledged|recovering",severity="critical"}) > 5
+        for: 10m
+        labels:
+          severity: warning
+          metric: service
+          category: service
+          team: platform
+        annotations:
+          value: '{{ $value }}'
+          summary: "Critical incident backlog"
+          description: "More than five critical incidents are unresolved."
+
+

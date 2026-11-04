@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  backend:
+    name: Backend tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+      - name: Run tests
+        working-directory: backend
+        env:
+          SHIP_ENABLE_MONITOR_LOOP: "false"
+          SHIP_ANSIBLE_DRY_RUN: "true"
+        run: python -m pytest tests -v --maxfail=1
+
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        working-directory: frontend
+        run: npm install --no-audit --no-fund
+      - name: Typecheck and build
+        working-directory: frontend
+        run: npm run build
+
+  configs:
+    name: Validate monitoring configuration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Prometheus config and rules
+        run: |
+          docker run --rm -v "$PWD/monitoring/prometheus:/etc/prometheus" \
+            --entrypoint promtool prom/prometheus:v2.54.1 \
+            check config /etc/prometheus/prometheus.yml
+          docker run --rm -v "$PWD/monitoring/prometheus:/etc/prometheus" \
+            --entrypoint promtool prom/prometheus:v2.54.1 \
+            check rules /etc/prometheus/rules/infrastructure.yml
+      - name: Validate Alertmanager config
+        run: |
+          docker run --rm -v "$PWD/monitoring/alertmanager:/etc/alertmanager" \
+            --entrypoint amtool prom/alertmanager:v0.27.0 \
+            check-config /etc/alertmanager/alertmanager.yml
+      - name: Validate compose file
+        run: docker compose config --quiet
+      - name: Validate Ansible syntax
+        run: |
+          pip install ansible-core==2.17.6
+          for playbook in ansible/playbooks/*.yml; do
+            ansible-playbook --syntax-check -i ansible/inventory/hosts.ini "$playbook"
+          done
